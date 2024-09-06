@@ -2,7 +2,7 @@ use core::panic;
 
 use crate::errors::Errors;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     // Operators
     Bang,
@@ -45,20 +45,33 @@ pub enum TokenType {
     Return,
     Var,
     Match,
+    Do,
+    End,
+    FnTypeAssigner,
+    FnTypeImplication,
+
+    // Types
+    NumberType,
+    FloatType,
+    BoolType,
+    StringType,
+    NilType,
+    FunctionType,
+    UnknownType,
 
     EOF,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    token: TokenType,
-    lexeme: String,
-    literal: String,
-    line: i32,
+    pub token: TokenType,
+    pub lexeme: String,
+    pub literal: String,
+    pub line: i32,
 }
 
 impl Token {
-    fn new(token: TokenType, lexeme: String, literal: String, line: i32) -> Token {
+    pub fn new(token: TokenType, lexeme: String, literal: String, line: i32) -> Token {
         Token {
             token,
             lexeme,
@@ -101,6 +114,10 @@ impl Scanner {
             "true" => Some(TokenType::True),
             "var" => Some(TokenType::Var),
             "match" => Some(TokenType::Match),
+            "number" => Some(TokenType::NumberType),
+            "float" => Some(TokenType::FloatType),
+            "bool" => Some(TokenType::BoolType),
+            "string" => Some(TokenType::StringType),
             _ => None,
         }
     }
@@ -112,7 +129,7 @@ impl Scanner {
     pub fn scan_tokens(&mut self) {
         while !self.is_at_end() {
             self.start = self.current;
-            self.scan_token();
+            let _ = self.scan_token();
         }
 
         self.tokens.push(Token::new(
@@ -123,22 +140,30 @@ impl Scanner {
         ));
     }
 
-    fn scan_token(&mut self) -> () {
+    fn scan_token(&mut self) -> Result<(), Errors> {
         let character = self.advance();
 
         match character {
             '\n' => self.line += 1,
             ' ' => (),
-            '{' => self.add_token(TokenType::LeftBrace),
-            '}' => self.add_token(TokenType::RightBrace),
-            '(' => self.add_token(TokenType::LeftParen),
-            ')' => self.add_token(TokenType::RightParen),
-            ',' => self.add_token(TokenType::Comma),
-            '.' => self.add_token(TokenType::Dot),
-            '-' => self.add_token(TokenType::Minus),
-            '+' => self.add_token(TokenType::Plus),
-            ';' => self.add_token(TokenType::Semicolon),
-            '*' => self.add_token(TokenType::Star),
+            '{' => self.add_token(TokenType::LeftBrace)?,
+            '}' => self.add_token(TokenType::RightBrace)?,
+            '(' => self.add_token(TokenType::LeftParen)?,
+            ')' => self.add_token(TokenType::RightParen)?,
+            ',' => self.add_token(TokenType::Comma)?,
+            '.' => self.add_token(TokenType::Dot)?,
+            '-' => {
+                let token = if self.is_match('>') {
+                    TokenType::FnTypeImplication
+                } else {
+                    TokenType::Minus
+                };
+
+                self.add_token(token)?
+            }
+            '+' => self.add_token(TokenType::Plus)?,
+            ';' => self.add_token(TokenType::Semicolon)?,
+            '*' => self.add_token(TokenType::Star)?,
             '!' => {
                 let token = if self.is_match('=') {
                     TokenType::BangEqual
@@ -146,7 +171,7 @@ impl Scanner {
                     TokenType::Equal
                 };
 
-                self.add_token(token)
+                self.add_token(token)?
             }
             '=' => {
                 let token = if self.is_match('=') {
@@ -155,7 +180,7 @@ impl Scanner {
                     TokenType::Equal
                 };
 
-                self.add_token(token)
+                self.add_token(token)?
             }
             '<' => {
                 let token = if self.is_match('=') {
@@ -164,7 +189,7 @@ impl Scanner {
                     TokenType::Less
                 };
 
-                self.add_token(token)
+                self.add_token(token)?
             }
             '>' => {
                 let token = if self.is_match('=') {
@@ -173,7 +198,7 @@ impl Scanner {
                     TokenType::Greater
                 };
 
-                self.add_token(token)
+                self.add_token(token)?
             }
             '#' => {
                 while self.peek() != '\n' && !self.is_at_end() {
@@ -197,7 +222,12 @@ impl Scanner {
                     self.advance();
                     self.advance();
                 } else {
-                    self.add_token(TokenType::Slash);
+                    let _ = self.add_token(TokenType::Slash);
+                }
+            }
+            ':' => {
+                if self.is_match(':') && !self.is_at_end() {
+                    let _ = self.add_token(TokenType::FnTypeAssigner);
                 }
             }
             '"' => self.make_string(),
@@ -211,6 +241,7 @@ impl Scanner {
                 }
             }
         };
+        Ok(())
     }
 
     fn advance(&mut self) -> char {
@@ -224,11 +255,17 @@ impl Scanner {
         self.current >= self.source.len().try_into().unwrap()
     }
 
-    fn add_token(&mut self, token: TokenType) {
-        self.add_token_literal(token, None);
+    fn add_token(&mut self, token: TokenType) -> Result<(), Errors> {
+        let _ = self.add_token_literal(token, None);
+
+        Ok(())
     }
 
-    fn add_token_literal(&mut self, token: TokenType, literal: Option<String>) {
+    fn add_token_literal(
+        &mut self,
+        token: TokenType,
+        literal: Option<String>,
+    ) -> Result<(), Errors> {
         let text = self.source[self.start.try_into().unwrap()..self.current.try_into().unwrap()]
             .to_string();
 
@@ -238,6 +275,8 @@ impl Scanner {
             literal.unwrap_or("".to_string()),
             self.line,
         ));
+
+        Ok(())
     }
 
     fn is_match(&mut self, expected: char) -> bool {
@@ -289,10 +328,10 @@ impl Scanner {
 
         let value = self.source[(self.start as usize) + 1..(self.current as usize) - 1].to_string();
 
-        self.add_token_literal(TokenType::String, Some(value));
+        let _ = self.add_token_literal(TokenType::String, Some(value));
     }
 
-    fn make_number(&mut self) {
+    fn make_number(&mut self) -> Result<(), Errors> {
         while self.peek().is_digit(10) {
             self.advance();
         }
@@ -307,10 +346,10 @@ impl Scanner {
 
         let value = self.source[(self.start as usize)..(self.current as usize)].to_string();
 
-        self.add_token_literal(TokenType::Number, Some(value));
+        self.add_token_literal(TokenType::Number, Some(value))
     }
 
-    fn make_identifier(&mut self) {
+    fn make_identifier(&mut self) -> Result<(), Errors> {
         while self.peek().is_alphanumeric() {
             self.advance();
         }
@@ -318,9 +357,9 @@ impl Scanner {
         let value = self.source[(self.start as usize)..(self.current as usize)].to_string();
 
         if let Some(keyword) = self.get_keyword(value.clone()) {
-            self.add_token(keyword);
+            return self.add_token(keyword);
         }
 
-        self.add_token_literal(TokenType::Identifier, Some(value));
+        return self.add_token_literal(TokenType::Identifier, Some(value));
     }
 }
